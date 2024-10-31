@@ -1,1 +1,1 @@
-# cmi_mlv
+# Child Mind Institute kaggle competition repository.
