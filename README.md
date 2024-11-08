@@ -7,7 +7,7 @@
 ![Democritus University of Thrace Logo](https://www.kvk.lt/wp-content/uploads/2022/07/image_2022-07-27_151720693.png)
 
 🤖 A predictive model capable of analyzing children's physical activity data to detect early indicators of problematic internet and technology use.<br>
- This model was made for the [Child Mind Institute Competition](https://www.kaggle.com/competitions/child-mind-institute-problematic-internet-use/overview) that was focusing on problematic internet usage by children and adolescents, which took place in Kaggle.
+ This model was made by some of the [MLV Research Group](http://mlv.cs.duth.gr) members for the [Child Mind Institute Competition](https://www.kaggle.com/competitions/child-mind-institute-problematic-internet-use/overview) that was focusing on problematic internet usage by children and adolescents, which took place in Kaggle.
 
 # Requirements
 
