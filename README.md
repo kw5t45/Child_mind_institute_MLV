@@ -1,7 +1,7 @@
 # About The Repository
 **Child Mind Institute — Problematic Internet Use**
 
-![Python](https://img.shields.io/badge/Python-3.8-blue)
+![Python](https://img.shields.io/badge/-Python-black?logo=python&style=flat)
 
 ![MLV Logo](http://mlv.cs.ihu.gr/wp-content/uploads/2021/12/MLV_logo.png)
 ![Democritus University of Thrace Logo](https://www.kvk.lt/wp-content/uploads/2022/07/image_2022-07-27_151720693.png)
