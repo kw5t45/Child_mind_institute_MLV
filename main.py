@@ -21,12 +21,33 @@ class Data:
         # self.parquet_data_dictionary: dictionary with id as a key and 2d accelerometer data as value
         # self.ids_list: list with all ids *WITH ACCELEROMETER DATA*
         # self.ids_labels: dictionary with id, label pair *ONLY OF ACCELEROMETERED ID'S*
+        # self.random_forest_dataset: dataset with +150 generated sii=3 entries, without unlabeled data.
+        # self.xgboost_dataset: dataset with features with > 0.5 correlation to label
         """
+
 
         self.padded_dataframe = pd.read_excel('sorted_padded_data_.xlsx')
         root_dir = 'series_train.parquet'
         # Read the Parquet file
         df = pd.read_csv('train.csv')
+
+        # setting random forest training dataset
+        df1 = self.padded_dataframe
+        df2 = self.smote_oversample_label_3_data()
+        df_joined = pd.concat([df1, df2], axis=0, ignore_index=True)
+        self.random_forest_dataset = df_joined.dropna(subset=['sii'])
+        # self.random_forest_dataset.to_excel('rf_dataset_with_oversampled_data2.xlsx')
+
+
+        # making xgboost dataset
+        xgboost_dataset = self.random_forest_dataset.copy()
+        for col in xgboost_dataset.columns:
+            if ('PCIAT-PCIAT' not in col) and (col!='sii'):
+                xgboost_dataset.drop(columns=col, inplace=True)
+
+        xgboost_dataset = xgboost_dataset.reset_index(drop=True)
+        self.xgboost_dataset = xgboost_dataset
+        # self.xgboost_dataset.to_excel('xgboost_dataset_threshold=0.5.xlsx')
 
         # Preview the  first few rows
         self.columns: List[str] = df.columns
@@ -48,7 +69,7 @@ class Data:
         ids_list = []
         ids_labels = {}
 
-        # iterating through each subdirectory
+        #iterating through each subdirectory
         for id_folder in tqdm(os.listdir(root_dir), desc="Reading .parquet files...", unit="item", ncols=100, colour="blue"):
             id_folder_path = os.path.join(root_dir, id_folder)
             if os.path.isdir(id_folder_path):
