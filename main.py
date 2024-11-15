@@ -49,27 +49,27 @@ class Data:
         ids_labels = {}
 
         # iterating through each subdirectory
-        # for id_folder in tqdm(os.listdir(root_dir), desc="Reading .parquet files...", unit="item", ncols=100, colour="blue"):
-        #     id_folder_path = os.path.join(root_dir, id_folder)
-        #     if os.path.isdir(id_folder_path):
-        #         for file in os.listdir(id_folder_path):
-        #             file_path = os.path.join(id_folder_path, file)
-        #
-        #             id_ = file_path[-23:-15]  # unique id of current file
-        #             df_: pd.DataFrame = pd.read_parquet(file_path)
-        #
-        #             # replacing steps (which is same as index) to label
-        #             df_.rename(columns={'step': 'sii'}, inplace=True)
-        #
-        #             dataset_id_row = self.data.loc[self.data['id'] == id_]
-        #             current_id_label = dataset_id_row['sii'].iloc[0]
-        #
-        #             ids_labels[id_] = current_id_label
-        #             ids_list.append(id_)
-        #             df_['sii'] = current_id_label
-        #
-        #             # adding dataframe to dictionary
-        #             parquet_data_dictionary[id_] = df_
+        for id_folder in tqdm(os.listdir(root_dir), desc="Reading .parquet files...", unit="item", ncols=100, colour="blue"):
+            id_folder_path = os.path.join(root_dir, id_folder)
+            if os.path.isdir(id_folder_path):
+                for file in os.listdir(id_folder_path):
+                    file_path = os.path.join(id_folder_path, file)
+
+                    id_ = file_path[-23:-15]  # unique id of current file
+                    df_: pd.DataFrame = pd.read_parquet(file_path)
+
+                    # replacing steps (which is same as index) to label
+                    df_.rename(columns={'step': 'sii'}, inplace=True)
+
+                    dataset_id_row = self.data.loc[self.data['id'] == id_]
+                    current_id_label = dataset_id_row['sii'].iloc[0]
+
+                    ids_labels[id_] = current_id_label
+                    ids_list.append(id_)
+                    df_['sii'] = current_id_label
+
+                    # adding dataframe to dictionary
+                    parquet_data_dictionary[id_] = df_
 
         # key: id, value: 2d tabular accelerometer data
         self.parquet_data_dictionary: Dict[str, pd.Dataframe] = parquet_data_dictionary
