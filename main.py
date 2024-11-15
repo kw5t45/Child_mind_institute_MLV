@@ -4,6 +4,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, List  # used for type hinting
+from tqdm import tqdm
+from sklearn.cluster import KMeans
+from scipy.spatial.distance import cdist
+from imblearn.over_sampling import SMOTE
 
 
 class Data:
@@ -12,12 +16,14 @@ class Data:
         """
         # self.data :standard dataframe
         # self.columns: list of headers of dataframe
+        # self.padded_dataframe: SORTED dataframe with padded values (on labeled data only!)
         # self.binary_data: dataframe with 0's for missing values and 1's for non-missing values
         # self.parquet_data_dictionary: dictionary with id as a key and 2d accelerometer data as value
         # self.ids_list: list with all ids *WITH ACCELEROMETER DATA*
         # self.ids_labels: dictionary with id, label pair *ONLY OF ACCELEROMETERED ID'S*
         """
 
+        self.padded_dataframe = pd.read_excel('sorted_padded_data_.xlsx')
         root_dir = 'series_train.parquet'
         # Read the Parquet file
         df = pd.read_csv('train.csv')
@@ -43,27 +49,27 @@ class Data:
         ids_labels = {}
 
         # iterating through each subdirectory
-        for id_folder in os.listdir(root_dir):
-            id_folder_path = os.path.join(root_dir, id_folder)
-            if os.path.isdir(id_folder_path):
-                for file in os.listdir(id_folder_path):
-                    file_path = os.path.join(id_folder_path, file)
-
-                    id_ = file_path[-23:-15]  # unique id of current file
-                    df_: pd.DataFrame = pd.read_parquet(file_path)
-
-                    # replacing steps (which is same as index) to label
-                    df_.rename(columns={'step': 'sii'}, inplace=True)
-
-                    dataset_id_row = self.data.loc[self.data['id'] == id_]
-                    current_id_label = dataset_id_row['sii'].iloc[0]
-
-                    ids_labels[id_] = current_id_label
-                    ids_list.append(id_)
-                    df_['sii'] = current_id_label
-
-                    # adding dataframe to dictionary
-                    parquet_data_dictionary[id_] = df_
+        # for id_folder in tqdm(os.listdir(root_dir), desc="Reading .parquet files...", unit="item", ncols=100, colour="blue"):
+        #     id_folder_path = os.path.join(root_dir, id_folder)
+        #     if os.path.isdir(id_folder_path):
+        #         for file in os.listdir(id_folder_path):
+        #             file_path = os.path.join(id_folder_path, file)
+        #
+        #             id_ = file_path[-23:-15]  # unique id of current file
+        #             df_: pd.DataFrame = pd.read_parquet(file_path)
+        #
+        #             # replacing steps (which is same as index) to label
+        #             df_.rename(columns={'step': 'sii'}, inplace=True)
+        #
+        #             dataset_id_row = self.data.loc[self.data['id'] == id_]
+        #             current_id_label = dataset_id_row['sii'].iloc[0]
+        #
+        #             ids_labels[id_] = current_id_label
+        #             ids_list.append(id_)
+        #             df_['sii'] = current_id_label
+        #
+        #             # adding dataframe to dictionary
+        #             parquet_data_dictionary[id_] = df_
 
         # key: id, value: 2d tabular accelerometer data
         self.parquet_data_dictionary: Dict[str, pd.Dataframe] = parquet_data_dictionary
@@ -97,16 +103,19 @@ class Data:
                 zeros += 1
         return ones * 100 / (ones + zeros)
 
-    @staticmethod
-    def get_correlation_heatmap(dataframe: pd.DataFrame):
+    def get_correlation_heatmap(self):
         '''
 
         :param dataframe: 2d pandas dataframe
         :return: plots correlation heatmap of given dataframe.
         '''
 
+        dataframe = self.data
         # cant plot id's
-        dataset.data.drop(columns='id', inplace=True)
+        try:
+            dataframe.drop(columns='id', inplace=True)
+        except KeyError:
+            pass
         correlation_matrix = dataframe.corr()
         plt.figure(figsize=(12, 10))
         sns.heatmap(correlation_matrix, annot=False, cmap='coolwarm')
@@ -147,7 +156,6 @@ class Data:
 
         plt.show()
 
-
     def get_violing_graph_of_mean_light(self):
 
         mean_light = []
@@ -170,11 +178,98 @@ class Data:
 
         plt.show()
 
+    @staticmethod
+    def get_kmeans_fit_unlabeled_data(file_path='sorted_padded_data_.xlsx') -> pd.DataFrame:
+        """
+
+        :param file_path
+        :return: returns pd Dataframe of given data and predicted sii on sii column, using kmeans clustering with
+        euclidian distance from centroids on non-missing data.
+        """
+        file_path = 'sorted_padded_data_.xlsx'
+        df = pd.read_excel(file_path)
+
+        # dropping id column for clustering
+        ids = df['id']
+        df = df.drop(columns=['id'])
+
+        # features
+        features = df.columns.difference(['sii'])
+
+        # ensuring data conversing
+        df[features] = df[features].apply(pd.to_numeric, errors='coerce')
+
+        labeled_data = df[df['sii'].notna()]
+        unlabeled_data = df[df['sii'].isna()]
+
+        # training kmeans on labeled data with non-missing values
+        labeled_features = labeled_data[features].dropna()
+        kmeans = KMeans(n_clusters=4, random_state=42)
+        kmeans.fit(labeled_features)
+
+        # custom distances using available features only
+        def custom_distance(point, centroids):
+            point = np.array(point, dtype=np.float64)
+            available_features = ~np.isnan(point)
+            if np.sum(available_features) == 0:  # return infinity if all values are NaN
+                return np.inf * np.ones(centroids.shape[0])
+            # take euclidian distance from centroids of clusters
+            return cdist([point[available_features]], centroids[:, available_features], metric='euclidean')[0]
+
+        # predicting clusters for unlabeled data using the custom distance function
+        predicted_labels = []
+        for _, row in unlabeled_data.iterrows():
+            distances = custom_distance(row[features].values, kmeans.cluster_centers_)
+            predicted_label = np.argmin(distances) if np.isfinite(distances).any() else -1
+            predicted_labels.append(predicted_label)
+
+        unlabeled_data['sii'] = predicted_labels
+        labeled_data: pd.DataFrame = unlabeled_data
+
+        return labeled_data
+
+    def smote_oversample_label_3_data(self) -> pd.DataFrame:
+        """
+
+        :return: pd dataframe of new generated entries for sii=3.
+        returns 159 entries (10% of majority class - sii=0)
+        """
+        df = self.padded_dataframe
+        df = df.drop('id', axis=1)
+
+        label_3_data = df[df['sii'] == 3].drop('sii', axis=1)
+        label_3_labels = df[df['sii'] == 3]['sii']
+
+        other_data = df[df['sii'] == 0].drop('sii', axis=1)
+        other_labels = df[df['sii'] == 0]['sii']
+
+        # aombine data for label '3' and the other class 0 - majority class
+        combined_data = pd.concat([label_3_data, other_data])
+        combined_labels = pd.concat([label_3_labels, other_labels])
+
+        # apply SMOTE to oversample label '3' class
+        smote = SMOTE(sampling_strategy=0.1,
+                      random_state=42)  # generating 159 samples of label 3 data (10% of majority class)
+        x_resampled, y_resampled = smote.fit_resample(combined_data, combined_labels)
+
+        resampled_df = pd.DataFrame(x_resampled, columns=combined_data.columns)
+        resampled_df['sii'] = y_resampled
+
+        df = resampled_df[resampled_df['sii'] == 3]
+        df = df.reset_index(drop=True)
+
+        df['id'] = 'smote_generated_entry'
+
+        return df
+
 
 dataset = Data()
 # dataset.get_binary_heatmap()                          # to get heatmap of (regular) dataset
 # print(dataset.columns)                                # to get all columns list
 # dataset.get_column_data_percentage('sii')             # to get data absense percentage on parameter column
-# dataset.get_correlation_heatmap(dataset.data)         # to get correlation heatmap
-# dataset.get_violin_graph_of_mean_enmos_per_label()    # to get mean enmos and label violin graph
-# dataset.get_violing_graph_of_mean_light()             # to get mean light and label violin graph
+# dataset.get_correlation_heatmap()                     # to get correlation heatmap
+# dataset.get_violin_graph_of_mean_enmos_per_label()    # to get mean enmos and label violin plot
+# dataset.get_violin_graph_of_mean_light()              # to get mean light and label violin plot
+# Data.get_kmeans_fit_unlabeled_data()                  # to label the unlabeled data using kmeans clustering
+# print(dataset.smote_oversample_label_3_data())        # to get SMOTE oversampled data from sii=3
+#######################################
