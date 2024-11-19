@@ -25,7 +25,6 @@ class Data:
         # self.xgboost_dataset: dataset with features with > 0.5 correlation to label
         """
 
-
         self.padded_dataframe = pd.read_excel('sorted_padded_data_.xlsx')
         root_dir = 'series_train.parquet'
         # Read the Parquet file
@@ -38,11 +37,10 @@ class Data:
         self.random_forest_dataset = df_joined.dropna(subset=['sii'])
         # self.random_forest_dataset.to_excel('rf_dataset_with_oversampled_data2.xlsx')
 
-
         # making xgboost dataset
         xgboost_dataset = self.random_forest_dataset.copy()
         for col in xgboost_dataset.columns:
-            if ('PCIAT-PCIAT' not in col) and (col!='sii'):
+            if ('PCIAT-PCIAT' not in col) and (col != 'sii'):
                 xgboost_dataset.drop(columns=col, inplace=True)
 
         xgboost_dataset = xgboost_dataset.reset_index(drop=True)
@@ -69,8 +67,9 @@ class Data:
         ids_list = []
         ids_labels = {}
 
-        #iterating through each subdirectory
-        for id_folder in tqdm(os.listdir(root_dir), desc="Reading .parquet files...", unit="item", ncols=100, colour="blue"):
+        # iterating through each subdirectory
+        for id_folder in tqdm(os.listdir(root_dir), desc="Reading .parquet files...", unit="item", ncols=100,
+                              colour="blue"):
             id_folder_path = os.path.join(root_dir, id_folder)
             if os.path.isdir(id_folder_path):
                 for file in os.listdir(id_folder_path):
@@ -200,54 +199,37 @@ class Data:
         plt.show()
 
     @staticmethod
-    def get_kmeans_fit_unlabeled_data(file_path='sorted_padded_data_.xlsx') -> pd.DataFrame:
+    def get_kmeans_fit_unlabeled_data(file_path='sorted_padded_data.xlsx') -> pd.DataFrame:
         """
 
         :param file_path
-        :return: returns pd Dataframe of given data and predicted sii on sii column, using kmeans clustering with
-        euclidian distance from centroids on non-missing data.
+        :return: k means clustering for k = 4
         """
-        file_path = 'sorted_padded_data_.xlsx'
+        file_path = file_path
         df = pd.read_excel(file_path)
-
-        # dropping id column for clustering
-        ids = df['id']
-        df = df.drop(columns=['id'])
-
-        # features
-        features = df.columns.difference(['sii'])
-
-        # ensuring data conversing
-        df[features] = df[features].apply(pd.to_numeric, errors='coerce')
-
-        labeled_data = df[df['sii'].notna()]
+        foo = False
+        try:
+            count = df['non_missing_count']
+            # df = df.drop(columns=['id'])
+            df = df.drop('non_missing_count', axis=1)
+            foo = True
+        except:
+            pass
         unlabeled_data = df[df['sii'].isna()]
 
-        # training kmeans on labeled data with non-missing values
-        labeled_features = labeled_data[features].dropna()
+        unlabeled_data_filled = unlabeled_data.fillna(-1)
+
+        X = unlabeled_data_filled.drop(['id', 'sii'], axis=1)
         kmeans = KMeans(n_clusters=4, random_state=42)
-        kmeans.fit(labeled_features)
+        kmeans.fit(X)
 
-        # custom distances using available features only
-        def custom_distance(point, centroids):
-            point = np.array(point, dtype=np.float64)
-            available_features = ~np.isnan(point)
-            if np.sum(available_features) == 0:  # return infinity if all values are NaN
-                return np.inf * np.ones(centroids.shape[0])
-            # take euclidian distance from centroids of clusters
-            return cdist([point[available_features]], centroids[:, available_features], metric='euclidean')[0]
+        unlabeled_data_filled['cluster'] = kmeans.labels_
 
-        # predicting clusters for unlabeled data using the custom distance function
-        predicted_labels = []
-        for _, row in unlabeled_data.iterrows():
-            distances = custom_distance(row[features].values, kmeans.cluster_centers_)
-            predicted_label = np.argmin(distances) if np.isfinite(distances).any() else -1
-            predicted_labels.append(predicted_label)
+        df.loc[df['sii'].isna(), 'sii'] = unlabeled_data_filled['cluster']
+        if foo:
+            df['non_missing_count'] = count
 
-        unlabeled_data['sii'] = predicted_labels
-        labeled_data: pd.DataFrame = unlabeled_data
-
-        return labeled_data
+        return df
 
     def smote_oversample_label_3_data(self) -> pd.DataFrame:
         """
@@ -255,7 +237,7 @@ class Data:
         :return: pd dataframe of new generated entries for sii=3.
         returns 159 entries (10% of majority class - sii=0)
         """
-        df = self.padded_dataframe
+        df = self.padded_dataframe.copy()
         df = df.drop('id', axis=1)
 
         label_3_data = df[df['sii'] == 3].drop('sii', axis=1)
@@ -283,8 +265,33 @@ class Data:
 
         return df
 
+    @staticmethod
+    def impute_with_noise(df, category_col, variance=0.01):
+        """
 
-dataset = Data()
+        :param df: dataframe
+        :param category_col: finding mean for each category
+        :param variance: noise variable
+        :return:
+        """
+        for column in df.columns:
+            if column not in [category_col, 'id']:  # Skip category and id columns
+                # Group by category and calculate the mean of each feature
+                feature_means = df.groupby(category_col)[column].mean()
+
+                # Apply imputation with noise
+                for category, mean_value in feature_means.items():
+                    # Get the rows where the feature is missing and the category matches
+                    mask = (df[column].isna()) & (df[category_col] == category)
+
+                    # Impute missing values with the mean of the category + small noise
+                    noise = np.random.normal(loc=0, scale=variance, size=mask.sum())  # Small random noise
+                    df.loc[mask, column] = mean_value + noise
+
+        return df
+
+
+# dataset = Data()
 # dataset.get_binary_heatmap()                          # to get heatmap of (regular) dataset
 # print(dataset.columns)                                # to get all columns list
 # dataset.get_column_data_percentage('sii')             # to get data absense percentage on parameter column
@@ -294,3 +301,10 @@ dataset = Data()
 # Data.get_kmeans_fit_unlabeled_data()                  # to label the unlabeled data using kmeans clustering
 # print(dataset.smote_oversample_label_3_data())        # to get SMOTE oversampled data from sii=3
 #######################################
+
+
+df = pd.read_excel('imputed.xlsx')
+
+
+
+
