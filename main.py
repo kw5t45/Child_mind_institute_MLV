@@ -1,310 +1,204 @@
-import os
-import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from typing import Dict, List  # used for type hinting
+import pandas as pd
+from colorama import Fore, Style
+
+from lightgbm import LGBMRegressor
+from catboost import CatBoostRegressor
+from xgboost import XGBRegressor
+
+from sklearn.base import clone
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import KNNImputer
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import cohen_kappa_score
+from scipy.optimize import minimize
+from sklearn.ensemble import VotingRegressor
+
+
 from tqdm import tqdm
-from sklearn.cluster import KMeans
-from scipy.spatial.distance import cdist
-from imblearn.over_sampling import SMOTE
-
-
-class Data:
-
-    def __init__(self):
-        """
-        # self.data :standard dataframe
-        # self.columns: list of headers of dataframe
-        # self.padded_dataframe: SORTED dataframe with padded values (on labeled data only!)
-        # self.binary_data: dataframe with 0's for missing values and 1's for non-missing values
-        # self.parquet_data_dictionary: dictionary with id as a key and 2d accelerometer data as value
-        # self.ids_list: list with all ids *WITH ACCELEROMETER DATA*
-        # self.ids_labels: dictionary with id, label pair *ONLY OF ACCELEROMETERED ID'S*
-        # self.random_forest_dataset: dataset with +150 generated sii=3 entries, without unlabeled data.
-        # self.xgboost_dataset: dataset with features with > 0.5 correlation to label
-        """
-
-        self.padded_dataframe = pd.read_excel('sorted_padded_data_.xlsx')
-        root_dir = 'series_train.parquet'
-        # Read the Parquet file
-        df = pd.read_csv('train.csv')
-
-        # setting random forest training dataset
-        df1 = self.padded_dataframe
-        df2 = self.smote_oversample_label_3_data()
-        df_joined = pd.concat([df1, df2], axis=0, ignore_index=True)
-        self.random_forest_dataset = df_joined.dropna(subset=['sii'])
-        # self.random_forest_dataset.to_excel('rf_dataset_with_oversampled_data2.xlsx')
-
-        # making xgboost dataset
-        xgboost_dataset = self.random_forest_dataset.copy()
-        for col in xgboost_dataset.columns:
-            if ('PCIAT-PCIAT' not in col) and (col != 'sii'):
-                xgboost_dataset.drop(columns=col, inplace=True)
-
-        xgboost_dataset = xgboost_dataset.reset_index(drop=True)
-        self.xgboost_dataset = xgboost_dataset
-        # self.xgboost_dataset.to_excel('xgboost_dataset_threshold=0.5.xlsx')
-
-        # Preview the  first few rows
-        self.columns: List[str] = df.columns
-        # mapping strings to numbers
-        season_mapping = {
-            'Winter': 1,
-            'Spring': 2,
-            'Summer': 3,
-            'Fall': 4
-        }
-        df = df.replace(season_mapping)
-
-        # binary mapping
-        binary_df = df.applymap(lambda x: 1 if pd.notna(x) and pd.to_numeric(x, errors='coerce') is not np.nan else 0)
-        self.data: pd.DataFrame = df
-        self.binary_data: pd.DataFrame = binary_df
-
-        parquet_data_dictionary = {}
-        ids_list = []
-        ids_labels = {}
-
-        # iterating through each subdirectory
-        for id_folder in tqdm(os.listdir(root_dir), desc="Reading .parquet files...", unit="item", ncols=100,
-                              colour="blue"):
-            id_folder_path = os.path.join(root_dir, id_folder)
-            if os.path.isdir(id_folder_path):
-                for file in os.listdir(id_folder_path):
-                    file_path = os.path.join(id_folder_path, file)
-
-                    id_ = file_path[-23:-15]  # unique id of current file
-                    df_: pd.DataFrame = pd.read_parquet(file_path)
-
-                    # replacing steps (which is same as index) to label
-                    df_.rename(columns={'step': 'sii'}, inplace=True)
-
-                    dataset_id_row = self.data.loc[self.data['id'] == id_]
-                    current_id_label = dataset_id_row['sii'].iloc[0]
-
-                    ids_labels[id_] = current_id_label
-                    ids_list.append(id_)
-                    df_['sii'] = current_id_label
-
-                    # adding dataframe to dictionary
-                    parquet_data_dictionary[id_] = df_
-
-        # key: id, value: 2d tabular accelerometer data
-        self.parquet_data_dictionary: Dict[str, pd.Dataframe] = parquet_data_dictionary
-        self.ids_list: List[str] = ids_list
-        self.ids_labels: Dict[str, float] = ids_labels
-
-    def get_binary_heatmap(self):
-        '''
-        plots binary heatmap showing absence of data in all columns in regular dataframe.
-        '''
-        data = self.binary_data
-        df = pd.DataFrame(data, columns=self.columns)
-        plt.figure(figsize=(20, 15))  # Increase figure size for better readability
-        # Default heatmap
-        p1 = sns.heatmap(df, cmap='binary', vmin=1, vmax=0)  # vmin and vmax set the color scale from 0 to 1
-        plt.show()
-
-    def get_column_data_percentage(self, col: str) -> float:
-        '''
-
-        :param col: header name of column of dataframe
-        :return: percentage showing absense of data in given column (0-100)
-        '''
-
-        ones = 0
-        zeros = 0
-        for i in (self.binary_data[col]):
-            if i == 1:
-                ones += 1
-            else:
-                zeros += 1
-        return ones * 100 / (ones + zeros)
-
-    def get_correlation_heatmap(self):
-        '''
-
-        :param dataframe: 2d pandas dataframe
-        :return: plots correlation heatmap of given dataframe.
-        '''
-
-        dataframe = self.data
-        # cant plot id's
-        try:
-            dataframe.drop(columns='id', inplace=True)
-        except KeyError:
-            pass
-        correlation_matrix = dataframe.corr()
-        plt.figure(figsize=(12, 10))
-        sns.heatmap(correlation_matrix, annot=False, cmap='coolwarm')
-        plt.title('Feature Correlation Heatmap')
-        plt.show()
-
-    def get_mean_column_on_accelerometer_data(self, id_: str, column: str) -> float:
-        """
-
-        :param id_: unique ID of person with accelerometer data
-        :param column: column to get mean value from
-
-        :return: mean value of column
-        """
-        dataframe: pd.DataFrame = self.parquet_data_dictionary[id_]
-        return dataframe[column].mean()
-
-    def get_violin_graph_of_mean_enmos_per_label(self):
-
-        mean_enmos = []
-        labels = []
-        for id_ in self.ids_list:
-            mean_enmos.append(self.get_mean_column_on_accelerometer_data(id_, 'enmo'))
-            labels.append(self.ids_labels[id_])
-
-        foo = pd.DataFrame({
-            'Values': mean_enmos,
-            'Category': labels
-        })
-
-        sns.violinplot(x='Category', y='Values', data=foo, inner='point', scale='width', bw=0.2)
-
-        # Set x-axis limits as specified
-        plt.ylim(0, 0.2)
-        plt.xlabel('Internet addiction test result (label)')
-        plt.ylabel('Values')
-        plt.title(r"Distribution of mean ENMO's by internet addiction test result")
-
-        plt.show()
-
-    def get_violing_graph_of_mean_light(self):
-
-        mean_light = []
-        labels = []
-        for id_ in self.ids_list:
-            mean_light.append(self.get_mean_column_on_accelerometer_data(id_, 'light'))
-            labels.append(self.ids_labels[id_])
-        foo = pd.DataFrame({
-            'Values': mean_light,
-            'Category': labels
-        })
-
-        sns.violinplot(x='Category', y='Values', data=foo, inner='point', scale='width', bw=0.2)
-
-        # Set x-axis limits as specified
-        plt.ylim(0, max(mean_light))
-        plt.xlabel('Internet addiction test result (label)')
-        plt.ylabel('Values')
-        plt.title(r"Distribution of mean light by internet addiction test result")
-
-        plt.show()
-
-    @staticmethod
-    def get_kmeans_fit_unlabeled_data(file_path='sorted_padded_data.xlsx') -> pd.DataFrame:
-        """
-
-        :param file_path
-        :return: k means clustering for k = 4
-        """
-        file_path = file_path
-        df = pd.read_excel(file_path)
-        foo = False
-        try:
-            count = df['non_missing_count']
-            # df = df.drop(columns=['id'])
-            df = df.drop('non_missing_count', axis=1)
-            foo = True
-        except:
-            pass
-        unlabeled_data = df[df['sii'].isna()]
-
-        unlabeled_data_filled = unlabeled_data.fillna(-1)
-
-        X = unlabeled_data_filled.drop(['id', 'sii'], axis=1)
-        kmeans = KMeans(n_clusters=4, random_state=42)
-        kmeans.fit(X)
-
-        unlabeled_data_filled['cluster'] = kmeans.labels_
-
-        df.loc[df['sii'].isna(), 'sii'] = unlabeled_data_filled['cluster']
-        if foo:
-            df['non_missing_count'] = count
-
-        return df
-
-    def smote_oversample_label_3_data(self) -> pd.DataFrame:
-        """
-
-        :return: pd dataframe of new generated entries for sii=3.
-        returns 159 entries (10% of majority class - sii=0)
-        """
-        df = self.padded_dataframe.copy()
-        df = df.drop('id', axis=1)
-
-        label_3_data = df[df['sii'] == 3].drop('sii', axis=1)
-        label_3_labels = df[df['sii'] == 3]['sii']
-
-        other_data = df[df['sii'] == 0].drop('sii', axis=1)
-        other_labels = df[df['sii'] == 0]['sii']
-
-        # aombine data for label '3' and the other class 0 - majority class
-        combined_data = pd.concat([label_3_data, other_data])
-        combined_labels = pd.concat([label_3_labels, other_labels])
-
-        # apply SMOTE to oversample label '3' class
-        smote = SMOTE(sampling_strategy=0.1,
-                      random_state=42)  # generating 159 samples of label 3 data (10% of majority class)
-        x_resampled, y_resampled = smote.fit_resample(combined_data, combined_labels)
-
-        resampled_df = pd.DataFrame(x_resampled, columns=combined_data.columns)
-        resampled_df['sii'] = y_resampled
-
-        df = resampled_df[resampled_df['sii'] == 3]
-        df = df.reset_index(drop=True)
-
-        df['id'] = 'smote_generated_entry'
-
-        return df
-
-    @staticmethod
-    def impute_with_noise(df, category_col, variance=0.01):
-        """
-
-        :param df: dataframe
-        :param category_col: finding mean for each category
-        :param variance: noise variable
-        :return:
-        """
-        for column in df.columns:
-            if column not in [category_col, 'id']:  # Skip category and id columns
-                # Group by category and calculate the mean of each feature
-                feature_means = df.groupby(category_col)[column].mean()
-
-                # Apply imputation with noise
-                for category, mean_value in feature_means.items():
-                    # Get the rows where the feature is missing and the category matches
-                    mask = (df[column].isna()) & (df[category_col] == category)
-
-                    # Impute missing values with the mean of the category + small noise
-                    noise = np.random.normal(loc=0, scale=variance, size=mask.sum())  # Small random noise
-                    df.loc[mask, column] = mean_value + noise
-
-        return df
-
-
-# dataset = Data()
-# dataset.get_binary_heatmap()                          # to get heatmap of (regular) dataset
-# print(dataset.columns)                                # to get all columns list
-# dataset.get_column_data_percentage('sii')             # to get data absense percentage on parameter column
-# dataset.get_correlation_heatmap()                     # to get correlation heatmap
-# dataset.get_violin_graph_of_mean_enmos_per_label()    # to get mean enmos and label violin plot
-# dataset.get_violin_graph_of_mean_light()              # to get mean light and label violin plot
-# Data.get_kmeans_fit_unlabeled_data()                  # to label the unlabeled data using kmeans clustering
-# print(dataset.smote_oversample_label_3_data())        # to get SMOTE oversampled data from sii=3
-#######################################
-
-
-df = pd.read_excel('imputed.xlsx')
 
 
+df = pd.read_csv("train.csv")
+df = df.dropna(subset=['sii']) # keeping labeled values only
+test = pd.read_csv("test.csv")
+season_mapping = {
+    'Winter': -1,
+    'Spring': -0.5,
+    'Summer': 0.5,
+    'Fall': 1
+}
+# mapping non-string values
+df = df.replace(season_mapping)
+test = test.replace(season_mapping)
 
+# dropping questions not in test dataset
+test_missing_columns = set(df.columns) - set(test.columns)
+for col in test_missing_columns:
+    if col != 'sii':  # Retain the target column for training
+        df.drop(columns=col, inplace=True)
+# for later use
+train_ids = df['id']
+test_ids = test['id']
+train_labels = df['sii']
+df = df.drop(columns=['id'])
 
+
+# weak correlation dropping
+# correlations = df.corr()['sii']  # Get correlations of all features with 'sii'
+#
+# # Identify features to drop based on correlation threshold
+# weak_corr_features = correlations[(correlations > -0.2) & (correlations < 0.2)].index
+#
+# # Drop weakly correlated features
+# df = df.drop(columns=weak_corr_features)
+# test = test.drop(columns=weak_corr_features)
+
+df = df.drop(columns=['sii'])
+imputer = KNNImputer(n_neighbors=4)  # k=4
+imputed_data = imputer.fit_transform(df)
+
+train = pd.DataFrame(imputed_data, columns=df.columns)
+train[:5]
+
+
+# qwk score
+def quadratic_weighted_kappa(y_true, y_pred):
+    return cohen_kappa_score(y_true, y_pred, weights='quadratic')
+
+
+# threshold rounder
+def threshold_Rounder(oof_non_rounded, thresholds):
+    return np.where(oof_non_rounded < thresholds[0], 0,
+                    np.where(oof_non_rounded < thresholds[1], 1,
+                             np.where(oof_non_rounded < thresholds[2], 2, 3)))
+
+
+# prediction evaluation using qwk function
+def evaluate_predictions(thresholds, y_true, oof_non_rounded):
+    rounded_p = threshold_Rounder(oof_non_rounded, thresholds)
+    return -quadratic_weighted_kappa(y_true, rounded_p)
+
+
+# funciton that trains any regressor model using kfold cross validation, k hard coded = 5
+def TrainML(model_class, test_data) -> list[int]:
+    X = train  # .drop(['sii'], axis=1)
+    y = train_labels
+    n_splits = 5
+    random_state = 42
+
+    ################
+    scaler = StandardScaler()
+
+    scaler.fit(X)
+
+    X = pd.DataFrame(scaler.transform(X), columns=X.columns)
+
+    # ids are stored in test_ids variable
+    test_data = test_data.drop(columns='id')
+    test_data = pd.DataFrame(scaler.transform(test_data), columns=test_data.columns)
+    #############
+    SKF = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+    train_S = []
+    test_S = []
+
+    oof_non_rounded = np.zeros(len(y), dtype=float)
+    oof_rounded = np.zeros(len(y), dtype=int)
+    test_preds = np.zeros((len(test_data), n_splits))
+
+    for fold, (train_idx, test_idx) in enumerate(tqdm(SKF.split(X, y), desc="Training Folds", total=n_splits)):
+        X_train, X_val = X.iloc[train_idx], X.iloc[test_idx]
+        y_train, y_val = y.iloc[train_idx], y.iloc[test_idx]
+        model = clone(model_class)
+        model.fit(X_train, y_train)
+
+        y_train_pred = model.predict(X_train)
+        y_val_pred = model.predict(X_val)
+
+        oof_non_rounded[test_idx] = y_val_pred
+        y_val_pred_rounded = y_val_pred.round(0).astype(int)
+        oof_rounded[test_idx] = y_val_pred_rounded
+
+        train_kappa = quadratic_weighted_kappa(y_train, y_train_pred.round(0).astype(int))
+        val_kappa = quadratic_weighted_kappa(y_val, y_val_pred_rounded)
+
+        train_S.append(train_kappa)
+        test_S.append(val_kappa)
+
+        test_preds[:, fold] = model.predict(test_data)
+
+        print(f"Fold {fold + 1} - Train QWK: {train_kappa:.4f}, Validation QWK: {val_kappa:.4f}")
+
+    print(f"Mean Train QWK --> {np.mean(train_S):.4f}")
+    print(f"Mean Validation QWK ---> {np.mean(test_S):.4f}")
+
+    KappaOPtimizer = minimize(evaluate_predictions,
+                              x0=[0.5, 1.5, 2.5], args=(y, oof_non_rounded),
+                              method='Nelder-Mead')
+    assert KappaOPtimizer.success, "Optimization did not converge."
+
+    oof_tuned = threshold_Rounder(oof_non_rounded, KappaOPtimizer.x)
+    tKappa = quadratic_weighted_kappa(y, oof_tuned)
+
+    print(f"----> || Optimized QWK SCORE :: {Fore.CYAN}{Style.BRIGHT} {tKappa:.3f}{Style.RESET_ALL}")
+
+    tpm = test_preds.mean(axis=1)
+    tp_rounded = threshold_Rounder(tpm, KappaOPtimizer.x)
+    return tp_rounded.tolist()
+
+
+
+LGBM_params = {
+    'learning_rate': 0.046,
+    'max_depth': 12,
+    'num_leaves': 478,
+    'min_data_in_leaf': 13,
+    'feature_fraction': 0.893,
+    'bagging_fraction': 0.784,
+    'bagging_freq': 4,
+    'lambda_l1': 10,
+    'lambda_l2': 0.01
+}
+
+
+XGB_Params = {
+    'learning_rate': 0.05,
+    'max_depth': 6,
+    'n_estimators': 400,
+    'subsample': 0.8,
+    'colsample_bytree': 0.8,
+    'reg_alpha': 1,
+    'reg_lambda': 5,
+    'random_state': 42,
+    'tree_method': 'exact'
+}
+
+
+CatBoost_Params = {
+    'learning_rate': 0.05,
+    'depth': 6,
+    'iterations': 400,
+    'random_seed': 42,
+    'verbose': 0,
+    'l2_leaf_reg': 10
+}
+Light = LGBMRegressor(**LGBM_params, random_state=42, verbose=-1, n_estimators=300)
+XGB_Model = XGBRegressor(**XGB_Params)
+CatBoost_Model = CatBoostRegressor(**CatBoost_Params)
+
+voting_model = VotingRegressor(estimators=[
+    ('lightgbm', Light),
+    ('xgboost', XGB_Model),
+    ('catboost', CatBoost_Model)],
+     weights=[0.3, 0.5, 0.2]
+)
+
+vote_preds = TrainML(model_class=voting_model, test_data=test)
+final_sub = pd.DataFrame({
+
+    'id': test_ids,
+    'sii': vote_preds
+})
+
+#final_sub.to_csv('submission.csv', index=False)
+print(final_sub)
