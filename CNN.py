@@ -7,13 +7,15 @@ from sklearn.impute import KNNImputer
 from scipy.optimize import minimize
 import tensorflow as tf
 from tensorflow.keras import Sequential
-from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, Conv1D, Flatten, MaxPooling1D
+from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, Conv1D, Flatten, MaxPooling1D, Embedding, GlobalMaxPooling1D, Input
+from tensorflow.keras.models import Model
 from tqdm import tqdm
+from sklearn.ensemble import RandomForestRegressor
 
 # Load and preprocess data
-df = pd.read_csv("train.csv")
+df = pd.read_csv("/kaggle/input/child-mind-institute-problematic-internet-use/train.csv")
 df = df.dropna(subset=['sii'])  # Keep labeled values only
-test = pd.read_csv("test.csv")
+test = pd.read_csv("/kaggle/input/child-mind-institute-problematic-internet-use/test.csv")
 season_mapping = {
     'Winter': -1,
     'Spring': -0.5,
@@ -45,7 +47,7 @@ test_scaled = scaler.transform(test_imputed)
 X = pd.DataFrame(df_scaled, columns=df.columns)
 y = train_labels
 
-# Define CNN model
+# CNN model for numeric features
 def build_cnn(input_shape):
     model = Sequential([
         Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=input_shape),
@@ -91,16 +93,30 @@ for fold, (train_idx, val_idx) in enumerate(tqdm(skf.split(X, y), total=n_splits
     X_val = X_val.reshape(-1, X_val.shape[1], 1)
     test_reshaped = test_scaled.reshape(-1, test_scaled.shape[1], 1)
 
+    # Train CNN
     cnn = build_cnn(input_shape=(X_train.shape[1], 1))
     cnn.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=20, batch_size=32, verbose=1)
 
-    val_preds = cnn.predict(X_val).flatten()
-    test_fold_preds = cnn.predict(test_reshaped).flatten()
+    # Train Random Forest
+    rf = RandomForestRegressor(n_estimators=100, random_state=random_state)
+    rf.fit(X_train.reshape(X_train.shape[0], -1), y_train)
+
+    # Combine predictions
+    cnn_val_preds = cnn.predict(X_val).flatten()
+    rf_val_preds = rf.predict(X_val.reshape(X_val.shape[0], -1))
+
+    val_preds = (cnn_val_preds + rf_val_preds) / 2
+
+    # Test predictions
+    cnn_test_preds = cnn.predict(test_reshaped).flatten()
+    rf_test_preds = rf.predict(test_scaled)
+
+    test_fold_preds = (cnn_test_preds + rf_test_preds) / 2
 
     oof_preds[val_idx] = val_preds
     test_preds[:, fold] = test_fold_preds
 
-    val_qwk = cohen_kappa_score(y_val, val_preds.round(), weights='quadratic')
+    val_qwk = cohen_kappa_score(y_val, threshold_rounder(val_preds, [0.5, 1.5, 2.5]), weights='quadratic')
     print(f"Fold {fold + 1} - Validation QWK: {val_qwk:.4f}")
 
 # Optimize thresholds
@@ -114,5 +130,5 @@ final_test_preds = test_preds.mean(axis=1)
 final_test_preds = threshold_rounder(final_test_preds, optimal_thresholds)
 
 submission = pd.DataFrame({'id': test_ids, 'sii': final_test_preds})
-submission.to_csv('submission.csv', index=False)
+submission.to_csv('/kaggle/working/submission.csv', index=False)
 print(submission)
